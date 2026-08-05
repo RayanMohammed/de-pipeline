@@ -2,3 +2,4 @@ venv/
 data/
 __pycache__/
 synthea_sample_data_fhir_latest/
+.DS_Store
