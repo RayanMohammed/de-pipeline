@@ -6,8 +6,12 @@ query = "SELECT * FROM patients;"
 
 curs.execute(query)
 results = curs.fetchall()
-for item in results:
-    print(item)
+
+print(f"Total results found: {len(results)}")
+print("-"*30)
+
+for row in results:
+    print(row)
 
 curs.close()
 conn.close()
