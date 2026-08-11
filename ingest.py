@@ -1,8 +1,10 @@
-import json, psycopg2
+import json, psycopg2, os
 from models import Patient, BundleEntry, Bundle
+from dotenv import load_dotenv
 
+load_dotenv()
 
-conn = psycopg2.connect(dbname="postgres", user="postgres", password="postgres", host="localhost", port=5432)
+conn = psycopg2.connect(os.getenv("DATABASE_URL"))
 curs = conn.cursor()
 query = "INSERT INTO patients (id, resource_type) VALUES (%s, %s)"
 

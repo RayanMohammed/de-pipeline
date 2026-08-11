@@ -1,5 +1,8 @@
+# Environments
+.env
 venv/
-data/
 __pycache__/
+# Other
+data/
 synthea_sample_data_fhir_latest/
 .DS_Store
