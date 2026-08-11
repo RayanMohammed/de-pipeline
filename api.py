@@ -1,36 +1,20 @@
-import uvicorn, psycopg2
-from psycopg2.extras import RealDictCursor
-from fastapi import FastAPI
+import os, uvicorn
+from dotenv import load_dotenv
+from supabase import create_client
+from fastapi import FastAPI, HTTPException
+from models import PatientListResponse
 
+load_dotenv()
 app = FastAPI(title="FHIR Pipeline")
+url = os.environ.get("SUPABASE_URL")
+key = os.environ.get("SUPABASE_KEY")
+supabase = create_client(url, key)
 
 @app.get("/")
 def home():
-    return {"key": "value"}
+    return "API is online"
 
-@app.get("/patients")
+@app.get("/patients", response_model=PatientListResponse)
 def get_patients():
-    conn = psycopg2.connect(
-        dbname="postgres", 
-        user="postgres", 
-        password="postgres", 
-        host="localhost", 
-        port=5432
-        )
-    curs = conn.cursor(cursor_factory=RealDictCursor)
-    query = "SELECT * FROM patients;"
-    try:
-        curs.execute(query)
-        results = curs.fetchall()
-
-        print(f"Total results found: {len(results)}")
-        print("-"*30)
-
-        for row in results:
-            print(row)
-    finally:
-        curs.close()
-        conn.close()
-    
-    return {"patients": results}
-
+    results = supabase.table('patients').select('*').execute()
+    return {"patients": results.data}

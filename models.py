@@ -1,15 +1,10 @@
 from pydantic import BaseModel
 
 
-class Patient(BaseModel):
+class PatientResponse(BaseModel):
     id: str
-    resourceType: str
+    gender: str | None = None
+    birth_date: str | None = None
 
-
-class BundleEntry(BaseModel):
-    resource: dict
-
-
-class Bundle(BaseModel):
-    resourceType: str
-    entry: list[BundleEntry]
+class PatientListResponse(BaseModel):
+    patients: list[PatientResponse]
