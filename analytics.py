@@ -1,3 +1,7 @@
+# NOTE: This script is for local ETL execution and testing. 
+# For cloud-based ingestion, please refer to the 
+# Google Colab notebook in this repository.
+
 import duckdb
 import pandas as pd
 import glob, json, os

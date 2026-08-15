@@ -15,6 +15,19 @@ def home():
     return "API is online"
 
 @app.get("/patients", response_model=PatientListResponse)
-def get_patients():
-    results = supabase.table('patients').select('*').execute()
+def get_patients(
+    gender:str | None = None,
+    age:str | None = None
+):
+    results = supabase.table('patients').select('*')
+
+    if gender:
+        results = results.eq("gender", gender)
+
+    if age == "asc":
+        results = results.order("birth_date", desc=False)
+    elif age == "desc":
+        results = results.order("birth_date", desc=True)
+
+    results = results.execute()
     return {"patients": results.data}
