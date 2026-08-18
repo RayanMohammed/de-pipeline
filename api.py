@@ -1,7 +1,7 @@
 import os, uvicorn
 from dotenv import load_dotenv
 from supabase import create_client
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Query
 from models import PatientListResponse
 
 load_dotenv()
@@ -17,12 +17,16 @@ def home():
 @app.get("/patients", response_model=PatientListResponse)
 def get_patients(
     gender:str | None = None,
-    age:str | None = None
+    min_bmi:float | None = Query(default=None, description="Filter patients with BMI greater than or equal to this value"),
+    age:str | None = Query(default=None, pattern="^(asc|desc)$")
 ):
     results = supabase.table('patients').select('*')
 
     if gender:
         results = results.eq("gender", gender)
+
+    if min_bmi is not None:
+        results = results.eq("min_bmi", min_bmi)
 
     if age == "asc":
         results = results.order("birth_date", desc=False)
