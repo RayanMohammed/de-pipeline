@@ -26,7 +26,7 @@ def get_patients(
         results = results.eq("gender", gender)
 
     if min_bmi is not None:
-        results = results.eq("min_bmi", min_bmi)
+        results = results.eq("bmi", min_bmi)
 
     if age == "asc":
         results = results.order("birth_date", desc=False)

@@ -1,5 +1,0 @@
-streamlit
-pandas
-supabase
-pydantic
-python-dotenv
