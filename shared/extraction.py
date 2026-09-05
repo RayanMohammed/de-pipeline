@@ -13,12 +13,20 @@ def classify_bmi(bmi_val: float | None):
         return "Obese"
 
 def extract_clinical_data(bundle_dict: dict):
-    if bundle_dict.get('resourceType') != 'Bundle' or not bundle_dict.get('entry', []):
+    if not isinstance(bundle_dict, dict) or bundle_dict.get('resourceType') != 'Bundle':
         return None
 
-    first_resource = bundle_dict['entry'][0].get('resource', {})
-        
-    if first_resource.get('resourceType') != 'Patient':
+    entries = bundle_dict.get("entry", [])
+    if not isinstance(entries, list): 
+        return None
+
+
+    has_patient = any(
+        entry.get('resource', {}).get('resourceType') == 'Patient'
+        for entry in entries
+        if isinstance(entry, dict)
+    )
+    if not has_patient:
         return None
 
     patient_info = {'raw_bundle': bundle_dict}
@@ -29,45 +37,57 @@ def extract_clinical_data(bundle_dict: dict):
     weight_kg = None
     latest_systolic = None
     latest_diastolic = None
-    for entry in bundle_dict['entry']:
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
         resource = entry.get('resource')
+        if not isinstance(resource, dict):
+            continue
+
         if resource:
             if resource.get('resourceType') == 'Patient':
                 patient_info['id'] = resource.get('id')
                 patient_info['gender'] = resource.get('gender')
                 patient_info['birth_date'] = resource.get('birthDate')
+
             elif resource.get('resourceType') == 'Observation':
                 obs_date = resource.get('effectiveDateTime', '')
                 if not obs_date:
                     continue
-                codes = resource.get('code', {}).get('coding', [])
+
+                codes = (resource.get('code') or {}).get('coding', [])
                 for code in codes:
-                    if code.get('code') == '8302-2' and obs_date >= latest_height_date: #height in cm
-                        height_cm = resource.get('valueQuantity', {}).get('value')
+                    #height in cm
+                    if code.get('code') == '8302-2' and obs_date >= latest_height_date: 
+                        height_cm = (resource.get('valueQuantity') or {}).get('value')
                         latest_height_date = obs_date
-                    elif code.get('code') == '29463-7' and obs_date >= latest_weight_date: #weight in kg
-                        weight_kg = resource.get('valueQuantity', {}).get('value')
+                    #weight in kg
+                    elif code.get('code') == '29463-7' and obs_date >= latest_weight_date: 
+                        weight_kg = (resource.get('valueQuantity') or {}).get('value')
                         latest_weight_date = obs_date
-                    elif code.get('code') == '85354-9' and obs_date >= latest_bp_date: #blood pressure
+                    #blood pressure
+                    elif code.get('code') == '85354-9' and obs_date >= latest_bp_date: 
                         latest_bp_date = obs_date
                         # systolic and diastolic values
                         for component in resource.get('component', []):
-                            if component.get('code', {}).get('coding', []):
-                                for coding in component.get('code', {}).get('coding', []):
-                                    if coding.get('code') == '8480-6': #systolic
-                                        val = component.get('valueQuantity', {}).get('value')
-                                        if val is not None:
+                            if (component.get('code') or {}).get('coding', []):
+                                for coding in (component.get('code') or {}).get('coding', []):
+                                    val = (component.get('valueQuantity') or {}).get('value')
+                                    if val is not None:
+                                        #systolic
+                                        if coding.get('code') == '8480-6': 
                                             latest_systolic = int(round(val))
-                                    elif coding.get('code') == '8462-4': #diastolic
-                                        val = component.get('valueQuantity', {}).get('value')
-                                        if val is not None:
+                                        #diastolic
+                                        elif coding.get('code') == '8462-4':
                                             latest_diastolic = int(round(val))
 
-    #bmi column creation
     patient_info['height_cm'] = height_cm
     patient_info['weight_kg'] = weight_kg
     patient_info['latest_systolic_bp'] = latest_systolic
     patient_info['latest_diastolic_bp'] = latest_diastolic
+
+    #bmi column creation
     if height_cm is not None and weight_kg is not None:
         if height_cm > 0 and weight_kg > 0:
             bmi_calc = round(weight_kg / ((height_cm / 100) ** 2), 1)
