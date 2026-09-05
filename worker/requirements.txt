@@ -1,0 +1,4 @@
+boto3
+asyncpg
+pydantic
+python-dotenv
