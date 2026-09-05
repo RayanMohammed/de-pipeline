@@ -45,10 +45,10 @@ jobs:
               env:
                 PGPASSWORD: test_password
               run: |
-                psql -h localhost -p 5432 -U test_user -d test_clinical_db -f db/schema.sql
+                psql -h 127.0.0.1 -p 5432 -U test_user -d test_clinical_db -f db/schema.sql
 
             - name: Run test suite
               env:
-                DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_clinical_db
+                DATABASE_URL: postgresql://test_user:test_password@127.0.0.1:5432/test_clinical_db
               run: |
                 pytest tests/ -v
