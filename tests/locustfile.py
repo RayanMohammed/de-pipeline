@@ -1,3 +1,6 @@
+# always run Locust with --host pointed at local uvicorn (http://127.0.0.1:8000).
+# never point load tests at deployed serverless URLs to avoid violations and unintended costs.
+
 from locust import HttpUser, task, between
 import random
 

@@ -5,25 +5,10 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Query, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from shared.extraction import extract_clinical_data
-
+from shared.queries import UPSERT_QUERY
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
-
-UPSERT_QUERY = """
-INSERT INTO patients (id, gender, birth_date, height_cm, weight_kg, bmi, bmi_category, latest_systolic_bp, latest_diastolic_bp, raw_bundle)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-ON CONFLICT (id) DO UPDATE SET 
-    gender = EXCLUDED.gender,
-    birth_date = EXCLUDED.birth_date,
-    height_cm = EXCLUDED.height_cm,
-    weight_kg = EXCLUDED.weight_kg,
-    bmi = EXCLUDED.bmi,
-    bmi_category = EXCLUDED.bmi_category,
-    latest_systolic_bp = EXCLUDED.latest_systolic_bp,
-    latest_diastolic_bp = EXCLUDED.latest_diastolic_bp,
-    raw_bundle = EXCLUDED.raw_bundle;
-"""
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -45,7 +30,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -107,7 +92,7 @@ async def ingest_single_bundle(
     parsed = extract_clinical_data(payload)
     if not parsed:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Payload failed validation: missing Patient resource or invalid Bundle structure.",
         )
 

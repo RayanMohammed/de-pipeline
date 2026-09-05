@@ -8,6 +8,7 @@ import asyncpg
 import boto3
 from dotenv import load_dotenv
 from shared.extraction import extract_clinical_data
+from shared.queries import UPSERT_QUERY
 
 load_dotenv()
 
@@ -17,21 +18,6 @@ R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "clinical-data-lake")
 DATABASE_URL = os.getenv("DATABASE_URL")
 ARCHIVE_KEY = "synthea_sample.tar.gz"
-
-query = """
-INSERT INTO patients (id, gender, birth_date, height_cm, weight_kg, bmi, bmi_category,latest_systolic_bp, latest_diastolic_bp, raw_bundle)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-ON CONFLICT (id) DO UPDATE SET 
-    gender = EXCLUDED.gender,
-    birth_date = EXCLUDED.birth_date,
-    height_cm = EXCLUDED.height_cm,
-    weight_kg = EXCLUDED.weight_kg,
-    bmi = EXCLUDED.bmi,
-    bmi_category = EXCLUDED.bmi_category,
-    latest_systolic_bp = EXCLUDED.latest_systolic_bp,
-    latest_diastolic_bp = EXCLUDED.latest_diastolic_bp,
-    raw_bundle = EXCLUDED.raw_bundle;
-"""
 
 def get_r2_client():
     return boto3.client(
@@ -135,12 +121,12 @@ async def main():
                     total_dlq += 1
                     continue
                 if len(batch_records) >= 500:
-                    await conn.executemany(query, batch_records)
+                    await conn.executemany(UPSERT_QUERY, batch_records)
                     print(f"Upserted chunk of {len(batch_records)} records...")
                     batch_records.clear()
 
             if batch_records:
-                await conn.executemany(query, batch_records)
+                await conn.executemany(UPSERT_QUERY, batch_records)
                 print(f"Upserted final chunk of {len(batch_records)} records.")
 
         print(
