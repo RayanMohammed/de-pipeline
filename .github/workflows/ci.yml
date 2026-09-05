@@ -49,6 +49,7 @@ jobs:
 
             - name: Run test suite
               env:
+                # altered database URL to check if the tests can connect to the database
                 DATABASE_URL: postgresql://test_user:test_password@127.0.0.1:5432/test_clinical_db
               run: |
                 pytest tests/ -v
