@@ -36,12 +36,12 @@ def test_extract_clinical_data_patient_at_end():
     }
     result = extract_clinical_data(bundle)
     assert result is not None
-    assert str(result["id"]) == p_id
-    assert result["gender"] == "male"
-    assert str(result["birth_date"]) == "1992-04-15"
-    assert result["height_cm"] == 175.0
-    assert result["weight_kg"] is None
-    assert result["bmi"] is None
+    assert str(result["patient"]["id"]) == p_id
+    assert result["patient"]["gender"] == "male"
+    assert str(result["patient"]["birth_date"]) == "1992-04-15"
+    assert result["patient"]["height_cm"] == 175.0
+    assert result["patient"]["weight_kg"] is None
+    assert result["patient"]["bmi"] is None
 
 def test_extract_clinical_data_updated_observation():
     p_id = str(uuid.uuid4())
@@ -76,7 +76,7 @@ def test_extract_clinical_data_updated_observation():
     }
     result = extract_clinical_data(bundle)
     assert result is not None
-    assert result["height_cm"] == 180.0  # the latest observation's value should be here
+    assert result["patient"]["height_cm"] == 180.0  # the latest observation's value should be here
 
 def test_extract_clinical_data_blood_pressure():
     p_id = str(uuid.uuid4())
@@ -112,8 +112,8 @@ def test_extract_clinical_data_blood_pressure():
     }
     result = extract_clinical_data(bundle)
     assert result is not None
-    assert result["latest_systolic_bp"] == 128
-    assert result["latest_diastolic_bp"] == 83
+    assert result["patient"]["latest_systolic_bp"] == 128
+    assert result["patient"]["latest_diastolic_bp"] == 83
 
 def test_extract_clinical_data_bmi_calculation():
     p_id = str(uuid.uuid4())
@@ -148,8 +148,8 @@ def test_extract_clinical_data_bmi_calculation():
     }
     result = extract_clinical_data(bundle)
     assert result is not None
-    assert result["bmi"] == 25.0
-    assert result["bmi_category"] == "Overweight"
+    assert result["patient"]["bmi"] == 25.0
+    assert result["patient"]["bmi_category"] == "Overweight"
 
 def test_extract_clinical_data_division_by_zero_bmi():
     p_id = str(uuid.uuid4())
@@ -184,8 +184,8 @@ def test_extract_clinical_data_division_by_zero_bmi():
     }
     result = extract_clinical_data(bundle)
     assert result is not None
-    assert result["bmi"] is None
-    assert result["bmi_category"] is None
+    assert result["patient"]["bmi"] is None
+    assert result["patient"]["bmi_category"] is None
 
 def test_invalid_payloads_return_none():
     assert extract_clinical_data(None) is None
