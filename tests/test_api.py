@@ -43,6 +43,7 @@ async def test_ingest_valid_bundle():
             {
                 "resource": {
                     "resourceType": "Observation",
+                    "id": str(uuid.uuid4()),
                     "effectiveDateTime": "2024-03-01T00:00:00Z",
                     "code": {"coding": [{"code": "8302-2"}]},
                     "valueQuantity": {"value": 165.0},
@@ -51,6 +52,7 @@ async def test_ingest_valid_bundle():
             {
                 "resource": {
                     "resourceType": "Observation",
+                    "id": str(uuid.uuid4()),
                     "effectiveDateTime": "2024-03-01T00:00:00Z",
                     "code": {"coding": [{"code": "29463-7"}]},
                     "valueQuantity": {"value": 60.0},

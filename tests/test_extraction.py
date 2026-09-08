@@ -19,6 +19,7 @@ def test_extract_clinical_data_patient_at_end():
             {
                 "resource": {
                     "resourceType": "Observation",
+                    "id": str(uuid.uuid4()),
                     "effectiveDateTime": "2024-01-01T10:00:00Z",
                     "code": {"coding": [{"code": "8302-2"}]},
                     "valueQuantity": {"value": 175.0},
@@ -59,6 +60,7 @@ def test_extract_clinical_data_updated_observation():
             {
                 "resource": {
                     "resourceType": "Observation",
+                    "id": str(uuid.uuid4()),
                     "effectiveDateTime": "2024-01-01T10:00:00Z",
                     "code": {"coding": [{"code": "8302-2"}]},
                     "valueQuantity": {"value": 175.0},
@@ -67,6 +69,7 @@ def test_extract_clinical_data_updated_observation():
             {
                 "resource": {
                     "resourceType": "Observation",
+                    "id": str(uuid.uuid4()),
                     "effectiveDateTime": "2024-02-01T10:00:00Z",
                     "code": {"coding": [{"code": "8302-2"}]},
                     "valueQuantity": {"value": 180.0},
@@ -94,6 +97,7 @@ def test_extract_clinical_data_blood_pressure():
             {
                 "resource": {
                     "resourceType": "Observation",
+                    "id": str(uuid.uuid4()),
                     "effectiveDateTime": "2024-02-14T08:30:00Z",
                     "code": {"coding": [{"code": "85354-9"}]},
                     "component": [
@@ -131,6 +135,7 @@ def test_extract_clinical_data_bmi_calculation():
             {
                 "resource": {
                     "resourceType": "Observation",
+                    "id": str(uuid.uuid4()),
                     "effectiveDateTime": "2024-01-01T00:00:00Z",
                     "code": {"coding": [{"code": "8302-2"}]},
                     "valueQuantity": {"value": 170.0},
@@ -139,6 +144,7 @@ def test_extract_clinical_data_bmi_calculation():
             {
                 "resource": {
                     "resourceType": "Observation",
+                    "id": str(uuid.uuid4()),
                     "effectiveDateTime": "2024-01-01T00:00:00Z",
                     "code": {"coding": [{"code": "29463-7"}]},
                     "valueQuantity": {"value": 72.2},
@@ -167,6 +173,7 @@ def test_extract_clinical_data_division_by_zero_bmi():
             {
                 "resource": {
                     "resourceType": "Observation",
+                    "id": str(uuid.uuid4()),
                     "effectiveDateTime": "2024-01-01T00:00:00Z",
                     "code": {"coding": [{"code": "8302-2"}]},
                     "valueQuantity": {"value": 0.0},
@@ -175,6 +182,7 @@ def test_extract_clinical_data_division_by_zero_bmi():
             {
                 "resource": {
                     "resourceType": "Observation",
+                    "id": str(uuid.uuid4()),
                     "effectiveDateTime": "2024-01-01T00:00:00Z",
                     "code": {"coding": [{"code": "29463-7"}]},
                     "valueQuantity": {"value": 70.0},
