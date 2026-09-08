@@ -96,23 +96,24 @@ async def ingest_single_bundle(
             detail="Payload failed validation: missing Patient resource or invalid Bundle structure.",
         )
 
+    patient = parsed["patient"]
     record_tuple = (
-        uuid.UUID(str(parsed["id"])),
-        parsed["gender"],
-        parsed["birth_date"],
-        parsed["height_cm"],
-        parsed["weight_kg"],
-        parsed["bmi"],
-        parsed["bmi_category"],
-        parsed["latest_systolic_bp"],
-        parsed["latest_diastolic_bp"],
-        json.dumps(parsed["raw_bundle"]),
+        uuid.UUID(str(patient["id"])),
+        patient["gender"],
+        patient["birth_date"],
+        patient["height_cm"],
+        patient["weight_kg"],
+        patient["bmi"],
+        patient["bmi_category"],
+        patient["latest_systolic_bp"],
+        patient["latest_diastolic_bp"],
+        json.dumps(patient["raw_bundle"]) if patient["raw_bundle"] is not None else None,
     )
 
     await conn.execute(UPSERT_QUERY, *record_tuple)
     return {
         "status": "upserted",
-        "patient_id": str(parsed["id"]),
-        "bmi": parsed["bmi"],
-        "bmi_category": parsed["bmi_category"],
+        "patient_id": str(patient["id"]),
+        "bmi": patient["bmi"],
+        "bmi_category": patient["bmi_category"],
     }

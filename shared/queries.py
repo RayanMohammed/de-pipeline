@@ -14,3 +14,30 @@ ON CONFLICT (id) DO UPDATE SET
     latest_diastolic_bp = EXCLUDED.latest_diastolic_bp,
     raw_bundle = EXCLUDED.raw_bundle;
 """
+
+OBSERVATION_UPSERT_QUERY = """
+INSERT INTO observations (
+    id, patient_id, observation_code, observation_description, observation_value, observation_unit, observation_date
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (id) DO UPDATE SET
+    patient_id = EXCLUDED.patient_id,
+    observation_code = EXCLUDED.observation_code,
+    observation_description = EXCLUDED.observation_description,
+    observation_value = EXCLUDED.observation_value,
+    observation_unit = EXCLUDED.observation_unit,
+    observation_date = EXCLUDED.observation_date;
+"""
+
+CONDITION_UPSERT_QUERY = """
+INSERT INTO conditions (
+    id, patient_id, condition_code, condition_description, start_date, end_date
+)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (id) DO UPDATE SET
+    patient_id = EXCLUDED.patient_id,
+    condition_code = EXCLUDED.condition_code,
+    condition_description = EXCLUDED.condition_description,
+    start_date = EXCLUDED.start_date,
+    end_date = EXCLUDED.end_date;
+"""

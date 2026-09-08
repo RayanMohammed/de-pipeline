@@ -1,42 +1,86 @@
-from shared.models import PatientResponse
+import uuid
+from shared.models import PatientResponse, ObservationResponse, ConditionResponse
+
+VITAL_CODES = {"8302-2": "height_cm", "29463-7": "weight_kg"}
+BP_COMPONENT_LABELS = {"8480-6": "Systolic Blood Pressure", "8462-4": "Diastolic Blood Pressure"}
+OBSERVATION_LABELS = {"8302-2": "Body Height", "29463-7": "Body Weight", **BP_COMPONENT_LABELS}
 
 def classify_bmi(bmi_val: float | None):
     if bmi_val is None:
         return None
     if bmi_val < 18.5:
         return "Underweight"
-    elif 18.5 <= bmi_val < 25.0:
+    elif bmi_val < 25.0:
         return "Normal"
-    elif 25.0 <= bmi_val < 30.0:
+    elif bmi_val < 30.0:
         return "Overweight"
-    else:
-        return "Obese"
+    return "Obese"
+
+def _extract_vital(resource, obs_id, obs_date, loinc_code):
+    quantity = resource.get('valueQuantity') or {}
+    value = quantity.get('value')
+    if value is None:
+        return None
+    return {
+        'id': obs_id, 'observation_code': loinc_code,
+        'observation_description': OBSERVATION_LABELS.get(loinc_code),
+        'observation_value': value, 'observation_unit': quantity.get('unit'),
+        'observation_date': obs_date[:10],
+    }
+
+def _extract_bp_components(resource, obs_id, obs_date):
+    rows = []
+    for component in resource.get('component', []):
+        comp_quantity = component.get('valueQuantity') or {}
+        comp_value = comp_quantity.get('value')
+        if comp_value is None:
+            continue
+        for coding in (component.get('code') or {}).get('coding', []):
+            comp_code = coding.get('code')
+            if comp_code not in BP_COMPONENT_LABELS:
+                continue
+            rows.append({
+                'id': uuid.uuid5(uuid.NAMESPACE_OID, f"{obs_id}:{comp_code}"),
+                'observation_code': comp_code,
+                'observation_description': BP_COMPONENT_LABELS[comp_code],
+                'observation_value': comp_value, 'observation_unit': comp_quantity.get('unit'),
+                'observation_date': obs_date[:10],
+            })
+    return rows
+
+def _extract_condition(resource):
+    onset = resource.get('onsetDateTime')
+    condition_id = resource.get('id')
+    if not onset or not condition_id:
+        return None
+    code_block = resource.get('code') or {}
+    codings = code_block.get('coding', [])
+    if not codings or not codings[0].get('code'):
+        return None
+    abatement = resource.get('abatementDateTime')
+    return {
+        'id': condition_id, 'condition_code': codings[0]['code'],
+        'condition_description': code_block.get('text') or codings[0].get('display'),
+        'start_date': onset[:10], 'end_date': abatement[:10] if abatement else None,
+    }
 
 def extract_clinical_data(bundle_dict: dict):
     if not isinstance(bundle_dict, dict) or bundle_dict.get('resourceType') != 'Bundle':
         return None
-
-    entries = bundle_dict.get("entry", [])
-    if not isinstance(entries, list): 
+    entries = bundle_dict.get('entry', [])
+    if not isinstance(entries, list):
         return None
-
-
     has_patient = any(
-        entry.get('resource', {}).get('resourceType') == 'Patient'
-        for entry in entries
-        if isinstance(entry, dict)
+        isinstance(e, dict) and e.get('resource', {}).get('resourceType') == 'Patient'
+        for e in entries
     )
     if not has_patient:
         return None
 
-    patient_info = {'raw_bundle': bundle_dict}
-    latest_height_date = ""
-    latest_weight_date = ""
-    latest_bp_date = ""
-    height_cm = None
-    weight_kg = None
-    latest_systolic = None
-    latest_diastolic = None
+    patient_info = {}
+    observations_raw, conditions_raw = [], []
+    latest_dates = {'8302-2': '', '29463-7': '', 'bp': ''}
+    latest_values = {'height_cm': None, 'weight_kg': None, 'latest_systolic_bp': None, 'latest_diastolic_bp': None}
 
     for entry in entries:
         if not isinstance(entry, dict):
@@ -44,62 +88,70 @@ def extract_clinical_data(bundle_dict: dict):
         resource = entry.get('resource')
         if not isinstance(resource, dict):
             continue
+        resource_type = resource.get('resourceType')
 
-        if resource:
-            if resource.get('resourceType') == 'Patient':
-                patient_info['id'] = resource.get('id')
-                patient_info['gender'] = resource.get('gender')
-                patient_info['birth_date'] = resource.get('birthDate')
+        if resource_type == 'Patient':
+            patient_info['id'] = resource.get('id')
+            patient_info['gender'] = resource.get('gender')
+            patient_info['birth_date'] = resource.get('birthDate')
+            continue
 
-            elif resource.get('resourceType') == 'Observation':
-                obs_date = resource.get('effectiveDateTime', '')
-                if not obs_date:
+        if resource_type == 'Condition':
+            condition = _extract_condition(resource)
+            if condition:
+                conditions_raw.append(condition)
+            continue
+
+        if resource_type != 'Observation':
+            continue
+
+        obs_id = resource.get('id')
+        obs_date = resource.get('effectiveDateTime', '')
+        if not obs_id or not obs_date:
+            continue
+
+        for coding in (resource.get('code') or {}).get('coding', []):
+            loinc_code = coding.get('code')
+
+            if loinc_code in VITAL_CODES:
+                row = _extract_vital(resource, obs_id, obs_date, loinc_code)
+                if row is None:
                     continue
+                observations_raw.append(row)
+                if obs_date >= latest_dates[loinc_code]:
+                    latest_dates[loinc_code] = obs_date
+                    latest_values[VITAL_CODES[loinc_code]] = row['observation_value']
 
-                codes = (resource.get('code') or {}).get('coding', [])
-                for code in codes:
-                    #height in cm
-                    if code.get('code') == '8302-2' and obs_date >= latest_height_date: 
-                        height_cm = (resource.get('valueQuantity') or {}).get('value')
-                        latest_height_date = obs_date
-                    #weight in kg
-                    elif code.get('code') == '29463-7' and obs_date >= latest_weight_date: 
-                        weight_kg = (resource.get('valueQuantity') or {}).get('value')
-                        latest_weight_date = obs_date
-                    #blood pressure
-                    elif code.get('code') == '85354-9' and obs_date >= latest_bp_date: 
-                        latest_bp_date = obs_date
-                        # systolic and diastolic values
-                        for component in resource.get('component', []):
-                            if (component.get('code') or {}).get('coding', []):
-                                for coding in (component.get('code') or {}).get('coding', []):
-                                    val = (component.get('valueQuantity') or {}).get('value')
-                                    if val is not None:
-                                        #systolic
-                                        if coding.get('code') == '8480-6': 
-                                            latest_systolic = int(round(val))
-                                        #diastolic
-                                        elif coding.get('code') == '8462-4':
-                                            latest_diastolic = int(round(val))
+            elif loinc_code == '85354-9':
+                bp_rows = _extract_bp_components(resource, obs_id, obs_date)
+                observations_raw.extend(bp_rows)
+                if obs_date >= latest_dates['bp']:
+                    latest_dates['bp'] = obs_date
+                    for row in bp_rows:
+                        rounded = int(round(row['observation_value']))
+                        target = 'latest_systolic_bp' if row['observation_code'] == '8480-6' else 'latest_diastolic_bp'
+                        latest_values[target] = rounded
 
-    patient_info['height_cm'] = height_cm
-    patient_info['weight_kg'] = weight_kg
-    patient_info['latest_systolic_bp'] = latest_systolic
-    patient_info['latest_diastolic_bp'] = latest_diastolic
-
-    #bmi column creation
-    if height_cm is not None and weight_kg is not None:
-        if height_cm > 0 and weight_kg > 0:
-            bmi_calc = round(weight_kg / ((height_cm / 100) ** 2), 1)
-        else:
-            bmi_calc = None
+    patient_info.update(latest_values)
+    height_cm, weight_kg = latest_values['height_cm'], latest_values['weight_kg']
+    if height_cm and weight_kg and height_cm > 0 and weight_kg > 0:
+        bmi_calc = round(weight_kg / ((height_cm / 100) ** 2), 1)
         patient_info['bmi'] = bmi_calc
         patient_info['bmi_category'] = classify_bmi(bmi_calc)
     else:
         patient_info['bmi'] = None
         patient_info['bmi_category'] = None
 
-    if 'id' in patient_info:
-        return PatientResponse(**patient_info).model_dump()
+    if 'id' not in patient_info:
+        return None
+    patient_id = patient_info['id']
 
-    return None
+    observations, conditions = [], []
+    for obs in observations_raw:
+        obs['patient_id'] = patient_id
+        observations.append(ObservationResponse(**obs).model_dump())
+    for cond in conditions_raw:
+        cond['patient_id'] = patient_id
+        conditions.append(ConditionResponse(**cond).model_dump())
+
+    return {'patient': PatientResponse(**patient_info).model_dump(), 'observations': observations, 'conditions': conditions}
