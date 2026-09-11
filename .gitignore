@@ -4,3 +4,4 @@
 *.tar.gz
 sample_cohort/
 tableau/*.csv
+tableau/__pycache__/
