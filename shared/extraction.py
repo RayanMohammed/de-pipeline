@@ -6,6 +6,10 @@ BP_COMPONENT_LABELS = {"8480-6": "Systolic Blood Pressure", "8462-4": "Diastolic
 OBSERVATION_LABELS = {"8302-2": "Body Height", "29463-7": "Body Weight", **BP_COMPONENT_LABELS}
 
 def classify_bmi(bmi_val: float | None):
+    """
+    Classifies BMI into 4 categories: Underweight, Normal, Overweight, Obese.
+    Returns None if bmi_val is None.
+    """
     if bmi_val is None:
         return None
     if bmi_val < 18.5:
@@ -16,7 +20,22 @@ def classify_bmi(bmi_val: float | None):
         return "Overweight"
     return "Obese"
 
+def compute_bmi(height_cm: float | None, weight_kg: float | None):
+    """
+    Calculates BMI from height in centimeters and weight in kilograms.
+    Returns a tuple of (bmi_value, bmi_category).
+    Returns (None, None) if height_cm or weight_kg is None or non-positive.
+    """
+    if not height_cm or not weight_kg or height_cm <= 0 or weight_kg <= 0:
+        return None, None
+    bmi_calc = round(weight_kg / ((height_cm / 100) ** 2), 1)
+    return bmi_calc, classify_bmi(bmi_calc)
+
 def _extract_vital(resource, obs_id, obs_date, loinc_code):
+    """
+    Extracts a vital sign observation from a FHIR Observation resource.
+    Returns a dictionary with observation details or None if the value is missing.
+    """
     quantity = resource.get('valueQuantity') or {}
     value = quantity.get('value')
     if value is None:
@@ -29,6 +48,10 @@ def _extract_vital(resource, obs_id, obs_date, loinc_code):
     }
 
 def _extract_bp_components(resource, obs_id, obs_date):
+    """
+    Extracts systolic and diastolic blood pressure components from a FHIR Observation resource.
+    Returns a list of dictionaries with observation details for each component.
+    """
     rows = []
     for component in resource.get('component', []):
         comp_quantity = component.get('valueQuantity') or {}
@@ -49,6 +72,10 @@ def _extract_bp_components(resource, obs_id, obs_date):
     return rows
 
 def _extract_condition(resource):
+    """
+    Extracts condition information from a FHIR Condition resource.
+    Returns a dictionary with condition details or None if the resource is invalid.
+    """
     onset = resource.get('onsetDateTime')
     condition_id = resource.get('id')
     if not onset or not condition_id:
@@ -65,6 +92,12 @@ def _extract_condition(resource):
     }
 
 def extract_clinical_data(bundle_dict: dict):
+    """
+    The heavy lifter.
+    Takes a FHIR Bundle dictionary and extracts the Patient, Observations, and Conditions.
+    Returns a dictionary with keys 'patient', 'observations', and 'conditions'.
+    Returns None if the bundle is invalid or missing a Patient resource.
+    """
     if not isinstance(bundle_dict, dict) or bundle_dict.get('resourceType') != 'Bundle':
         return None
     entries = bundle_dict.get('entry', [])
@@ -133,14 +166,9 @@ def extract_clinical_data(bundle_dict: dict):
                         latest_values[target] = rounded
 
     patient_info.update(latest_values)
-    height_cm, weight_kg = latest_values['height_cm'], latest_values['weight_kg']
-    if height_cm and weight_kg and height_cm > 0 and weight_kg > 0:
-        bmi_calc = round(weight_kg / ((height_cm / 100) ** 2), 1)
-        patient_info['bmi'] = bmi_calc
-        patient_info['bmi_category'] = classify_bmi(bmi_calc)
-    else:
-        patient_info['bmi'] = None
-        patient_info['bmi_category'] = None
+    patient_info['bmi'], patient_info['bmi_category'] = compute_bmi(
+        latest_values['height_cm'], latest_values['weight_kg']
+    )
 
     if 'id' not in patient_info:
         return None

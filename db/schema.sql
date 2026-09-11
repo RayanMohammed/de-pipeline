@@ -15,6 +15,13 @@ CREATE INDEX IF NOT EXISTS patients_birth_date_idx ON patients(birth_date);
 CREATE INDEX IF NOT EXISTS patients_systolic_bp_idx ON patients(latest_systolic_bp);
 CREATE INDEX IF NOT EXISTS patients_diastolic_bp_idx ON patients(latest_diastolic_bp);
 
+-- Synthea-imported patients won't have these filled (extraction.py doesn't parse FHIR HumanName),
+-- doesn't matter because natural-key matching only applies for the manual-entry.
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS first_name TEXT;
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS last_name TEXT;
+CREATE INDEX IF NOT EXISTS patients_name_dob_idx
+    ON patients (lower(first_name), lower(last_name), birth_date);
+
 CREATE TABLE IF NOT EXISTS observations (
     id UUID PRIMARY KEY,
     patient_id UUID NOT NULL REFERENCES patients(id),
