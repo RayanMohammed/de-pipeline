@@ -122,6 +122,6 @@ SELECT
 FROM observations o
 JOIN patients p ON p.id = o.patient_id
 WHERE p.first_name IS NOT NULL AND p.last_name IS NOT NULL
-ORDER BY o.observation_date DESC, o.id DESC
+ORDER BY o.created_at DESC
 LIMIT $1;
 """

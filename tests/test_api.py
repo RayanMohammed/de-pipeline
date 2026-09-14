@@ -447,4 +447,9 @@ async def test_recent_activity_includes_a_freshly_recorded_visit():
             response = await client.get("/api/patients/recent-activity?limit=10")
             assert response.status_code == 200
             last_names = [entry["last_name"] for entry in response.json()]
-            assert unique_last_name in last_names
+            # The API title-cases names on intake (ManualPatientIntake normalizes
+            # this so name matching isn't case-sensitive) -- Python's .title()
+            # also capitalizes any letter right after a digit, so a hex-suffixed
+            # test name like "Activity7b3a727e" comes back "Activity7B3A727E".
+            # Assert against what the app actually, correctly, stores.
+            assert unique_last_name.title() in last_names

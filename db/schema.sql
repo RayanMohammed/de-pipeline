@@ -39,6 +39,14 @@ CREATE TABLE IF NOT EXISTS observations (
 CREATE INDEX IF NOT EXISTS observations_patient_code_date_idx
     ON observations(patient_id, observation_code, observation_date);
 
+-- observation_date is clinical date only (no time component), so on a day with
+-- many visits it ties constantly and can't order a recent-activity feed by
+-- itself. created_at tracks actual write time for that -- same idea, same
+-- caveat, as patients.created_at above: pre-existing rows all share the
+-- migration timestamp, only writes from now on are meaningful.
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS observations_created_at_idx ON observations(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS conditions (
     id UUID PRIMARY KEY,
     patient_id UUID NOT NULL REFERENCES patients(id),
