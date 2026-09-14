@@ -261,6 +261,9 @@ async def ingest_single_bundle(
         patient["latest_systolic_bp"],
         patient["latest_diastolic_bp"],
         json.dumps(patient["raw_bundle"]) if patient["raw_bundle"] is not None else None,
+        None,  # ingestion_run_id -- this endpoint is direct/manual ingestion, not
+               # a tagged scheduled run, so COALESCE in UPSERT_QUERY leaves any
+               # existing tag on the row untouched.
     )
 
     await conn.execute(UPSERT_QUERY, *record_tuple)
