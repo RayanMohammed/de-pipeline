@@ -43,7 +43,9 @@ ON CONFLICT (id) DO UPDATE SET
 """
 
 FIND_PATIENT_BY_NAME_DOB_QUERY = """
-SELECT id FROM patients
+SELECT id, first_name, last_name, gender, birth_date, height_cm, weight_kg,
+       bmi, bmi_category, latest_systolic_bp, latest_diastolic_bp
+FROM patients
 WHERE lower(first_name) = lower($1)
   AND lower(last_name) = lower($2)
   AND birth_date = $3;
@@ -67,4 +69,25 @@ ON CONFLICT (id) DO UPDATE SET
     bmi_category = COALESCE(EXCLUDED.bmi_category, patients.bmi_category),
     latest_systolic_bp = COALESCE(EXCLUDED.latest_systolic_bp, patients.latest_systolic_bp),
     latest_diastolic_bp = COALESCE(EXCLUDED.latest_diastolic_bp, patients.latest_diastolic_bp);
+"""
+
+# Gets every observation ever recorded for one patient, oldest first, 
+# regardless of its origin (batch import or manual entry).
+OBSERVATIONS_BY_PATIENT_QUERY = """
+SELECT observation_code, observation_description, observation_value,
+       observation_unit, observation_date
+FROM observations
+WHERE patient_id = $1
+ORDER BY observation_date;
+"""
+
+# Prevents collision between two patients with the same name + DOB by checking for
+# existing patients with the same name + DOB before allowing a new patient to be
+# created. If a patient with the same name + DOB already exists, the query returns
+# the existing patient's ID, which can be used to update the existing patient instead.
+PATIENT_BY_ID_QUERY = """
+SELECT id, first_name, last_name, gender, birth_date, height_cm, weight_kg,
+       bmi, bmi_category, latest_systolic_bp, latest_diastolic_bp
+FROM patients
+WHERE id = $1;
 """

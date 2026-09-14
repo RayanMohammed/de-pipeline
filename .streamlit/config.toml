@@ -1,0 +1,19 @@
+[theme]
+base = "light"
+# Darker teal than the dark-mode version -- white text on a button needs more
+# contrast against a light page than it did against a black one, so this is
+# shifted from #0D9488 to #0F766E to stay readable.
+primaryColor = "#0F766E"
+# Plain white instead of black -- this is what actually fixes the "unnerving"
+# feeling: the Tableau embed's own background is white, so the page around it
+# now matches instead of framing it in a stark black void.
+backgroundColor = "#FFFFFF"
+# A soft blue-gray, not pure white, for widget backgrounds (input boxes, the
+# form container, code blocks) -- this is where the "blue" shows up, as
+# texture on secondary surfaces rather than one flat colored wall.
+secondaryBackgroundColor = "#EAF1F3"
+textColor = "#1A202C"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"

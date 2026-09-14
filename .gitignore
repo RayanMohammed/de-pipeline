@@ -4,4 +4,13 @@
 *.tar.gz
 sample_cohort/
 tableau/*.csv
-tableau/__pycache__/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Locust load-test output (regenerate with: locust -f tests/locustfile.py ...)
+locust_report*
+results_*.csv
+
+# Files delivered by Claude into this folder (interview-prep notes, etc.) -- not part of the project
+Claude outputs/

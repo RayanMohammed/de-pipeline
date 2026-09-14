@@ -184,3 +184,149 @@ async def test_manual_entry_rejects_out_of_range_vitals():
         ) as client:
             response = await client.post("/api/patients/manual-entry", json=payload)
             assert response.status_code == 422
+
+@pytest.mark.anyio
+async def test_lookup_finds_existing_match():
+    unique_last = f"Lookupfound{uuid.uuid4().hex[:8]}"
+    payload = {
+        "first_name": "Lucy",
+        "last_name": unique_last,
+        "birth_date": "1985-03-20",
+        "height_cm": 162.0,
+        "weight_kg": 58.0,
+    }
+    async with lifespan(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            created = await client.post("/api/patients/manual-entry", json=payload)
+            assert created.status_code == 201
+            patient_id = created.json()["patient_id"]
+
+            response = await client.get(
+                "/api/patients/lookup",
+                params={
+                    "first_name": "Lucy",
+                    "last_name": unique_last,
+                    "birth_date": "1985-03-20",
+                },
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["match_found"] is True
+            assert data["patient"]["id"] == patient_id
+            assert data["patient"]["first_name"] == "Lucy"
+            assert data["patient"]["bmi"] == created.json()["bmi"]
+
+@pytest.mark.anyio
+async def test_lookup_returns_no_match_for_unknown_patient():
+    async with lifespan(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(
+                "/api/patients/lookup",
+                params={
+                    "first_name": "Nobody",
+                    "last_name": f"Exists{uuid.uuid4().hex[:8]}",
+                    "birth_date": "1970-01-01",
+                },
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["match_found"] is False
+            assert data["patient"] is None
+
+@pytest.mark.anyio
+async def test_manual_entry_force_new_creates_second_patient_despite_matching_name_dob():
+    unique_last = f"Sameperson{uuid.uuid4().hex[:8]}"
+    payload = {
+        "first_name": "Alex",
+        "last_name": unique_last,
+        "birth_date": "1990-01-01",
+        "height_cm": 175.0,
+        "weight_kg": 70.0,
+    }
+    async with lifespan(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            first = await client.post("/api/patients/manual-entry", json=payload)
+            assert first.status_code == 201
+            first_id = first.json()["patient_id"]
+
+            # Same name + DOB, but the DOCTOR confirms it's a different person.
+            second = await client.post(
+                "/api/patients/manual-entry",
+                json={**payload, "force_new": True},
+            )
+            assert second.status_code == 201
+            assert second.json()["matched_existing_patient"] is False
+            assert second.json()["patient_id"] != first_id
+
+@pytest.mark.anyio
+async def test_get_patient_observations_returns_full_history_oldest_first():
+    unique_last = f"History{uuid.uuid4().hex[:8]}"
+    first_visit = {
+        "first_name": "Morgan",
+        "last_name": unique_last,
+        "birth_date": "1992-07-04",
+        "height_cm": 170.0,
+        "weight_kg": 65.0,
+        "observation_date": "2024-01-10",
+    }
+    second_visit = dict(first_visit, weight_kg=67.0, observation_date="2024-06-15")
+
+    async with lifespan(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            first = await client.post("/api/patients/manual-entry", json=first_visit)
+            assert first.status_code == 201
+            patient_id = first.json()["patient_id"]
+
+            second = await client.post("/api/patients/manual-entry", json=second_visit)
+            assert second.status_code == 201
+            assert second.json()["patient_id"] == patient_id  # same natural key, same patient
+
+            response = await client.get(f"/api/patients/{patient_id}/observations")
+            assert response.status_code == 200
+            rows = response.json()
+
+            weight_rows = [r for r in rows if r["observation_code"] == "29463-7"]
+            assert [r["observation_value"] for r in weight_rows] == [65.0, 67.0]
+            assert weight_rows[0]["observation_date"] < weight_rows[1]["observation_date"]
+
+@pytest.mark.anyio
+async def test_get_patient_by_id_returns_snapshot():
+    unique_last = f"Byid{uuid.uuid4().hex[:8]}"
+    payload = {
+        "first_name": "Priya",
+        "last_name": unique_last,
+        "birth_date": "1994-11-02",
+        "height_cm": 160.0,
+        "weight_kg": 55.0,
+    }
+    async with lifespan(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            created = await client.post("/api/patients/manual-entry", json=payload)
+            assert created.status_code == 201
+            patient_id = created.json()["patient_id"]
+
+            response = await client.get(f"/api/patients/{patient_id}")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["id"] == patient_id
+            assert data["first_name"] == "Priya"
+            assert data["bmi"] == created.json()["bmi"]
+
+@pytest.mark.anyio
+async def test_get_patient_by_id_404_for_unknown_id():
+    async with lifespan(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(f"/api/patients/{uuid.uuid4()}")
+            assert response.status_code == 404

@@ -22,6 +22,11 @@ ALTER TABLE patients ADD COLUMN IF NOT EXISTS last_name TEXT;
 CREATE INDEX IF NOT EXISTS patients_name_dob_idx
     ON patients (lower(first_name), lower(last_name), birth_date);
 
+-- Tracks actual insertion time for "recently added" so it can be queried, existing rows all have
+-- 2026-09-11 because they were inserted in that batch; meaningless timestamp; only rows inserted 
+-- from now have a meaningful created_at.
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
 CREATE TABLE IF NOT EXISTS observations (
     id UUID PRIMARY KEY,
     patient_id UUID NOT NULL REFERENCES patients(id),

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 import datetime, uuid
 
 class PatientResponse(BaseModel):
@@ -49,6 +49,21 @@ class ManualPatientIntake(BaseModel):
     systolic_bp: int | None = Field(default=None, ge=40, le=300)
     diastolic_bp: int | None = Field(default=None, ge=20, le=200)
     observation_date: datetime.date | None = None
+    force_new: bool = Field(default=False)
+
+    @model_validator(mode="after")
+    def normalize_and_validate_intake(self):
+        self.first_name = self.first_name.strip().title()
+        self.last_name = self.last_name.strip().title()
+
+        if self.height_cm is not None and self.weight_kg is not None:
+            bmi = self.weight_kg / ((self.height_cm / 100) ** 2)
+            if not (10 <= bmi <= 200):
+                raise ValueError(
+                    f"Height/weight combination produces an invalid BMI ({bmi:.1f}). "
+                    "Please double-check the height and weight values."
+                )
+        return self
 
 class ManualIntakeResponse(BaseModel):
     patient_id: uuid.UUID
@@ -56,3 +71,27 @@ class ManualIntakeResponse(BaseModel):
     bmi: float | None = None
     bmi_category: str | None = None
     observations_recorded: int
+
+class PatientSnapshot(BaseModel):
+    id: uuid.UUID
+    first_name: str | None = None
+    last_name: str | None = None
+    gender: str | None = None
+    birth_date: datetime.date | None = None
+    height_cm: float | None = None
+    weight_kg: float | None = None
+    bmi: float | None = None
+    bmi_category: str | None = None
+    latest_systolic_bp: int | None = None
+    latest_diastolic_bp: int | None = None
+
+class PatientMatchResponse(BaseModel):
+    match_found: bool
+    patient: PatientSnapshot | None = None
+
+class ObservationHistoryEntry(BaseModel):
+    observation_code: str
+    observation_description: str | None = None
+    observation_value: float | None = None
+    observation_unit: str | None = None
+    observation_date: datetime.date | None = None
