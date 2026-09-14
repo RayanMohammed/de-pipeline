@@ -113,7 +113,11 @@ Swap `POOL_MAX_SIZE` and `DATABASE_URL` (direct connection vs. the transaction-p
 | `tableau/csv_export.py` | Flattens the DB into CSVs for the Tableau workbook. |
 | `tests/` | Unit tests (pure extraction logic, no DB) and integration tests (real test DB, run in CI). |
 | `tests/locustfile.py`, `tests/locustfile_baseline.py` | Load-test definitions used in the connection-pooling investigation below. |
+| `tests/test_ingestion_cap.py` | Unit tests for the scheduled-ingestion batch-size math (boundary cases: cap already reached, small headroom, clamping against a forced random draw). |
 | `.github/workflows/ci.yml` | Spins up an ephemeral Postgres container and runs the full test suite on every push/PR to `main`. |
+| `.github/workflows/scheduled-ingestion.yml` | Passive, scheduled ingestion -- a cron-triggered Actions job that generates a fresh batch of synthetic patients via Synthea and ingests them automatically, capped and lineage-tagged. See "Scheduled, unattended ingestion" below. |
+| `scripts/check_ingestion_cap.py` | Decides whether a scheduled run should do anything: queries the real patient count and computes a capped, randomized batch size. |
+| `scripts/stage_synthea_batch.py` | Packages a scheduled run's Synthea output into an archive and uploads it to R2. |
 | `docker-compose.yml`, `api/Dockerfile`, `dashboard/Dockerfile` | Runs the whole stack (a disposable local Postgres, the API, the dashboard) with one command -- see "Running it locally" below. |
 
 ## Design decisions worth explaining
@@ -172,6 +176,20 @@ Real EHR software (Epic, specifically, since that's what I had screenshots of) i
 Separately, a friend's portfolio sites (marketing landing pages, built to sell a product in fifteen seconds) had one thing worth borrowing even though they're a different category of deliverable entirely: a confident first impression instead of dropping straight into a form. The new **Home view** is that pattern applied honestly — a one-line pitch, three live stat tiles pulled from the real database, and a three-card grid describing what the tool actually does — landing-page confidence backed by real data instead of a mockup.
 
 The last addition is a **persistent patient identity rail**: once a patient is loaded, a compact card in the sidebar keeps showing who's active (name, age, DOB) no matter which tab or view you switch to. It's a small thing, but it's the difference between a patient's identity being a page you were just on versus context that's always visible — which is the whole point of the identity-collision safeguard elsewhere in this project actually mattering in the UI, not just in the API.
+
+## Scheduled, unattended ingestion
+
+Everything above runs on demand -- `batch_ingest.py` processes whatever archive you point it at. `.github/workflows/scheduled-ingestion.yml` puts that same worker on an actual passive schedule: a GitHub Actions cron job firing every 4 hours, with `workflow_dispatch` also enabled so a run can be triggered manually and verified before trusting it to the schedule.
+
+Getting here meant running into a real dead end first. The obvious way to run Synthea (the Java tool this project's synthetic FHIR data comes from) cheaply and repeatably in CI would be a maintained Docker image -- there isn't one. The project's own Docker Hub image, and every community one I checked, are 8-10 years old and predate Synthea's Ruby-to-Java rewrite, and the current maintainers' wiki says outright there are no plans to containerize the Java version. What actually works doesn't need Docker at all: Synthea publishes a prebuilt, self-contained `synthea-with-dependencies.jar` directly on its GitHub Releases, and `ubuntu-latest` runners already ship with Java -- so the workflow downloads the jar and runs it directly, no build step, no image to maintain.
+
+Each scheduled run:
+
+1. `scripts/check_ingestion_cap.py` queries the real patient count in Postgres directly, since the API isn't deployed anywhere persistent that a scheduled job could reach. A small pure function, `compute_batch_size` (unit-tested for its boundary cases in `tests/test_ingestion_cap.py`, independent of any database), decides whether there's headroom left under a fixed cap and, if so, how many patients to generate -- a random draw between 100 and 200, clamped so a run can never push the total past the cap.
+2. If there's headroom, Synthea generates that many synthetic patients, and `scripts/stage_synthea_batch.py` packages the FHIR output into an archive and uploads it to R2 -- filtering out Synthea's non-patient reference files (`hospitalInformation*`, `practitionerInformation*`) so they don't show up as noise in the dead-letter queue.
+3. `worker/batch_ingest.py` ingests that archive exactly like any other, tagging every row it writes with `--ingestion-run-id` set to the GitHub Actions run ID -- so `SELECT ingestion_run_id, COUNT(*) FROM patients GROUP BY 1` shows exactly which rows came from which scheduled run, real lineage instead of one undifferentiated blob of data.
+
+The cap exists because this runs against Supabase's free tier, which caps storage and compute -- not because of any limit on how much synthetic data Synthea itself can generate. Once the count check reports no headroom left, the workflow still fires on its 4-hour schedule but exits right after the cap check -- the intended steady state once the campaign completes, not a failure.
 
 ## Known limitations / what I'd do next
 

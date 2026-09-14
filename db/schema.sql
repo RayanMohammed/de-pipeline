@@ -27,6 +27,13 @@ CREATE INDEX IF NOT EXISTS patients_name_dob_idx
 -- from now have a meaningful created_at.
 ALTER TABLE patients ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
+-- Ties a row back to the specific scheduled-ingestion run that wrote it.
+-- NULL for every patient from the original one-time historical batch, which
+-- predates this column entirely -- same "not meaningful for old rows"
+-- pattern as created_at above.
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS ingestion_run_id TEXT;
+CREATE INDEX IF NOT EXISTS patients_ingestion_run_id_idx ON patients(ingestion_run_id);
+
 CREATE TABLE IF NOT EXISTS observations (
     id UUID PRIMARY KEY,
     patient_id UUID NOT NULL REFERENCES patients(id),

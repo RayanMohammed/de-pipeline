@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import io
 import json
@@ -17,7 +18,21 @@ R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "clinical-data-lake")
 DATABASE_URL = os.getenv("DATABASE_URL")
-ARCHIVE_KEY = "synthea_subset.tar.gz"
+DEFAULT_ARCHIVE_KEY = "synthea_subset.tar.gz"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Ingest a FHIR bundle archive from R2 into Postgres.")
+    parser.add_argument(
+        "--archive-key", default=DEFAULT_ARCHIVE_KEY,
+        help="R2 object key of the .tar.gz archive to ingest (default: the original historical archive).",
+    )
+    parser.add_argument(
+        "--ingestion-run-id", default=None,
+        help="Tag written onto every patient row from this run (e.g. a scheduled-ingestion run id). "
+             "Omitted for the original manual/historical invocation.",
+    )
+    return parser.parse_args()
 
 def get_r2_client():
     return boto3.client(
@@ -39,15 +54,27 @@ def send_to_dlq(s3_client, file_name: str, raw_content: str, error_reason: str):
     print(f"--> Diverted to DLQ [{file_name}]: {error_reason}")
 
 async def main():
+    args = parse_args()
+    archive_key = args.archive_key
+    ingestion_run_id = args.ingestion_run_id
+
     s3 = get_r2_client()
 
-    print(f"Fetching {ARCHIVE_KEY} from R2 into memory...")
-    response = s3.get_object(Bucket=R2_BUCKET_NAME, Key=ARCHIVE_KEY)
+    print(f"Fetching {archive_key} from R2 into memory...")
+    if ingestion_run_id:
+        print(f"Tagging every row from this run with ingestion_run_id={ingestion_run_id}")
+    response = s3.get_object(Bucket=R2_BUCKET_NAME, Key=archive_key)
     raw_archive_bytes = response["Body"].read()
     byte_stream = io.BytesIO(raw_archive_bytes)
 
     print("Connecting to PostgreSQL via asyncpg...")
-    conn = await asyncpg.connect(DATABASE_URL)
+    # statement_cache_size=0: required if DATABASE_URL points at Supabase's
+    # transaction-mode pooler rather than a direct connection -- asyncpg's
+    # default prepared-statement caching assumes one connection maps to one
+    # stable backend, which a transaction pooler doesn't guarantee across
+    # this script's sequential chunked transactions. Same fix api/main.py
+    # already applies for its pool.
+    conn = await asyncpg.connect(DATABASE_URL, statement_cache_size=0)
 
     batch_records = []
     observation_batch = []
@@ -121,6 +148,7 @@ async def main():
                         patient["latest_systolic_bp"],
                         patient["latest_diastolic_bp"],
                         json.dumps(patient["raw_bundle"]) if patient["raw_bundle"] is not None else None,
+                        ingestion_run_id,
                     )
                     batch_records.append(record_tuple)
 

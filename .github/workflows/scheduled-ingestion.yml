@@ -1,0 +1,81 @@
+name: Scheduled Synthetic Patient Ingestion
+
+on:
+    workflow_dispatch:
+    schedule:
+        # Every 4 hours. At ~100-200 patients per run (randomized) and a
+        # 3,000-patient cap, this campaign runs itself to completion in
+        # roughly a day, then goes quiet (see check_ingestion_cap.py).
+        - cron: "0 */4 * * *"
+
+env:
+    MAX_PATIENTS: "3000"
+
+jobs:
+    ingest:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v4
+
+            - name: Set up Python
+              uses: actions/setup-python@v5
+              with:
+                python-version: "3.12"
+                cache: "pip"
+
+            - name: Install dependencies
+              run: |
+                python -m pip install --upgrade pip
+                pip install -r requirements.txt
+
+            - name: Check ingestion cap
+              env:
+                DATABASE_URL: ${{ secrets.DATABASE_URL }}
+              run: python scripts/check_ingestion_cap.py
+
+            - name: Set up Java
+              if: env.SHOULD_INGEST == 'true'
+              uses: actions/setup-java@v4
+              with:
+                distribution: "temurin"
+                java-version: "21"
+
+            - name: Download Synthea
+              if: env.SHOULD_INGEST == 'true'
+              run: |
+                curl -sSL -o synthea-with-dependencies.jar \
+                  https://github.com/synthetichealth/synthea/releases/download/master-branch-latest/synthea-with-dependencies.jar
+
+            - name: Generate synthetic patients
+              if: env.SHOULD_INGEST == 'true'
+              run: |
+                java -jar synthea-with-dependencies.jar \
+                  -p ${{ env.BATCH_SIZE }} \
+                  --exporter.fhir.export=true
+
+            - name: Package batch and upload to R2
+              if: env.SHOULD_INGEST == 'true'
+              env:
+                R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+                R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+                R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+                R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+              run: |
+                python scripts/stage_synthea_batch.py \
+                  --source-dir output/fhir \
+                  --archive-key scheduled/${{ github.run_id }}.tar.gz
+
+            - name: Ingest batch into Postgres
+              if: env.SHOULD_INGEST == 'true'
+              env:
+                DATABASE_URL: ${{ secrets.DATABASE_URL }}
+                R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+                R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+                R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+                R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+              run: |
+                python -m worker.batch_ingest \
+                  --archive-key scheduled/${{ github.run_id }}.tar.gz \
+                  --ingestion-run-id ${{ github.run_id }}
