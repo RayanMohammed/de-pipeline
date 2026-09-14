@@ -1,6 +1,10 @@
-import pytest, uuid
+import os, pytest, uuid
 from httpx import ASGITransport, AsyncClient
 from api.main import app, lifespan
+
+# Must match a real API_KEY in the environment (set in .env locally, in
+# ci.yml in CI) since api.main reads it once at import time.
+AUTH_HEADERS = {"X-API-Key": os.getenv("API_KEY", "test-key")}
 
 @pytest.mark.anyio
 async def test_health_check():
@@ -64,9 +68,7 @@ async def test_ingest_valid_bundle():
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.post(
-                "/api/patients/ingest", json=valid_payload
-            )
+            response = await client.post("/api/patients/ingest", json=valid_payload, headers=AUTH_HEADERS)
             assert response.status_code == 201
             data = response.json()
             assert data["status"] == "upserted"
@@ -92,9 +94,7 @@ async def test_ingest_invalid_bundle():
                     }
                 ],
             }
-            response = await client.post(
-                "/api/patients/ingest", json=invalid_payload
-            )
+            response = await client.post("/api/patients/ingest", json=invalid_payload, headers=AUTH_HEADERS)
             assert response.status_code == 422
             assert "Payload failed validation" in response.json()["detail"]
 
@@ -115,7 +115,7 @@ async def test_manual_entry_creates_new_patient():
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.post("/api/patients/manual-entry", json=payload)
+            response = await client.post("/api/patients/manual-entry", json=payload, headers=AUTH_HEADERS)
             assert response.status_code == 201
             data = response.json()
             assert data["matched_existing_patient"] is False
@@ -138,14 +138,14 @@ async def test_manual_entry_matches_existing_patient_by_name_dob():
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            first = await client.post("/api/patients/manual-entry", json=payload)
+            first = await client.post("/api/patients/manual-entry", json=payload, headers=AUTH_HEADERS)
             assert first.status_code == 201
             first_id = first.json()["patient_id"]
             assert first.json()["matched_existing_patient"] is False
 
             # same person, later visit --> new vitals, same natural key
             follow_up = dict(payload, weight_kg=84.0, systolic_bp=130, diastolic_bp=85)
-            second = await client.post("/api/patients/manual-entry", json=follow_up)
+            second = await client.post("/api/patients/manual-entry", json=follow_up, headers=AUTH_HEADERS)
             assert second.status_code == 201
             assert second.json()["matched_existing_patient"] is True
             assert second.json()["patient_id"] == first_id
@@ -163,7 +163,7 @@ async def test_manual_entry_defensive_null_bmi():
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.post("/api/patients/manual-entry", json=payload)
+            response = await client.post("/api/patients/manual-entry", json=payload, headers=AUTH_HEADERS)
             assert response.status_code == 201
             data = response.json()
             assert data["bmi"] is None
@@ -182,7 +182,7 @@ async def test_manual_entry_rejects_out_of_range_vitals():
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.post("/api/patients/manual-entry", json=payload)
+            response = await client.post("/api/patients/manual-entry", json=payload, headers=AUTH_HEADERS)
             assert response.status_code == 422
 
 @pytest.mark.anyio
@@ -199,7 +199,7 @@ async def test_lookup_finds_existing_match():
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            created = await client.post("/api/patients/manual-entry", json=payload)
+            created = await client.post("/api/patients/manual-entry", json=payload, headers=AUTH_HEADERS)
             assert created.status_code == 201
             patient_id = created.json()["patient_id"]
 
@@ -251,7 +251,7 @@ async def test_manual_entry_force_new_creates_second_patient_despite_matching_na
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            first = await client.post("/api/patients/manual-entry", json=payload)
+            first = await client.post("/api/patients/manual-entry", json=payload, headers=AUTH_HEADERS)
             assert first.status_code == 201
             first_id = first.json()["patient_id"]
 
@@ -259,6 +259,7 @@ async def test_manual_entry_force_new_creates_second_patient_despite_matching_na
             second = await client.post(
                 "/api/patients/manual-entry",
                 json={**payload, "force_new": True},
+                headers=AUTH_HEADERS,
             )
             assert second.status_code == 201
             assert second.json()["matched_existing_patient"] is False
@@ -281,11 +282,11 @@ async def test_get_patient_observations_returns_full_history_oldest_first():
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            first = await client.post("/api/patients/manual-entry", json=first_visit)
+            first = await client.post("/api/patients/manual-entry", json=first_visit, headers=AUTH_HEADERS)
             assert first.status_code == 201
             patient_id = first.json()["patient_id"]
 
-            second = await client.post("/api/patients/manual-entry", json=second_visit)
+            second = await client.post("/api/patients/manual-entry", json=second_visit, headers=AUTH_HEADERS)
             assert second.status_code == 201
             assert second.json()["patient_id"] == patient_id  # same natural key, same patient
 
@@ -311,7 +312,7 @@ async def test_get_patient_by_id_returns_snapshot():
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            created = await client.post("/api/patients/manual-entry", json=payload)
+            created = await client.post("/api/patients/manual-entry", json=payload, headers=AUTH_HEADERS)
             assert created.status_code == 201
             patient_id = created.json()["patient_id"]
 
@@ -330,3 +331,120 @@ async def test_get_patient_by_id_404_for_unknown_id():
         ) as client:
             response = await client.get(f"/api/patients/{uuid.uuid4()}")
             assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_manual_entry_requires_api_key():
+    payload = {
+        "first_name": "NoKey",
+        "last_name": f"Case{uuid.uuid4().hex[:8]}",
+        "birth_date": "1990-01-01",
+    }
+    async with lifespan(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post("/api/patients/manual-entry", json=payload)
+            assert response.status_code == 401
+
+@pytest.mark.anyio
+async def test_manual_entry_rejects_wrong_api_key():
+    payload = {
+        "first_name": "WrongKey",
+        "last_name": f"Case{uuid.uuid4().hex[:8]}",
+        "birth_date": "1990-01-01",
+    }
+    async with lifespan(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/patients/manual-entry",
+                json=payload,
+                headers={"X-API-Key": "definitely-not-it"},
+            )
+            assert response.status_code == 401
+
+@pytest.mark.anyio
+async def test_ingest_requires_api_key():
+    async with lifespan(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post("/api/patients/ingest", json={"resourceType": "Bundle"})
+            assert response.status_code == 401
+
+@pytest.mark.anyio
+async def test_stats_endpoint_shape():
+    async with lifespan(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/stats")
+            assert response.status_code == 200
+            data = response.json()
+            assert "total_patients" in data
+            assert data["total_patients"] >= 0
+            assert "bmi_distribution" in data
+            for key in ("underweight", "normal", "overweight", "obese"):
+                assert key in data["bmi_distribution"]
+
+@pytest.mark.anyio
+async def test_stats_reflects_a_freshly_created_patient():
+    # /api/stats is a SQL-side COUNT(*), not "however many rows a paginated
+    # /api/patients call happened to return" -- this is the regression test
+    # for that distinction: create a patient, then confirm the total went up
+    # by exactly one rather than being silently capped at a page size.
+    async with lifespan(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            before = (await client.get("/api/stats")).json()["total_patients"]
+            await client.post(
+                "/api/patients/manual-entry",
+                json={
+                    "first_name": f"StatsCheck{uuid.uuid4().hex[:8]}",
+                    "last_name": "Patient",
+                    "birth_date": "1988-04-04",
+                    "height_cm": 170,
+                    "weight_kg": 70,
+                },
+                headers=AUTH_HEADERS,
+            )
+            after = (await client.get("/api/stats")).json()["total_patients"]
+            assert after == before + 1
+
+@pytest.mark.anyio
+async def test_recent_activity_respects_limit():
+    async with lifespan(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/patients/recent-activity?limit=3")
+            assert response.status_code == 200
+            data = response.json()
+            assert isinstance(data, list)
+            assert len(data) <= 3
+
+@pytest.mark.anyio
+async def test_recent_activity_includes_a_freshly_recorded_visit():
+    async with lifespan(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            unique_last_name = f"Activity{uuid.uuid4().hex[:8]}"
+            await client.post(
+                "/api/patients/manual-entry",
+                json={
+                    "first_name": "Recent",
+                    "last_name": unique_last_name,
+                    "birth_date": "1979-02-02",
+                    "height_cm": 168,
+                    "weight_kg": 64,
+                },
+                headers=AUTH_HEADERS,
+            )
+            response = await client.get("/api/patients/recent-activity?limit=10")
+            assert response.status_code == 200
+            last_names = [entry["last_name"] for entry in response.json()]
+            assert unique_last_name in last_names

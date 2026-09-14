@@ -8,3 +8,4 @@ pytest
 anyio
 boto3
 locust
+slowapi

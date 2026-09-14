@@ -91,3 +91,37 @@ SELECT id, first_name, last_name, gender, birth_date, height_cm, weight_kg,
 FROM patients
 WHERE id = $1;
 """
+
+# Cheap, SQL-side aggregates for the dashboard's Home view -- avoids pulling
+# every patient row into Python just to count them or average their BMI,
+# which is both slower and wrong the moment the table exceeds one page.
+PATIENT_STATS_QUERY = """
+SELECT
+    COUNT(*) AS total_patients,
+    AVG(bmi) AS avg_bmi,
+    COUNT(*) FILTER (WHERE bmi_category = 'Underweight') AS underweight_count,
+    COUNT(*) FILTER (WHERE bmi_category = 'Normal') AS normal_count,
+    COUNT(*) FILTER (WHERE bmi_category = 'Overweight') AS overweight_count,
+    COUNT(*) FILTER (WHERE bmi_category = 'Obese') AS obese_count,
+    MAX(created_at) AS most_recent_patient_at
+FROM patients;
+"""
+
+# A cross-patient activity feed -- the most recent observations recorded,
+# joined back to who they belong to. Used for the dashboard's "recent
+# activity" list, the same idea as an EHR's recent-encounters view.
+RECENT_ACTIVITY_QUERY = """
+SELECT
+    o.patient_id,
+    p.first_name,
+    p.last_name,
+    o.observation_description,
+    o.observation_value,
+    o.observation_unit,
+    o.observation_date
+FROM observations o
+JOIN patients p ON p.id = o.patient_id
+WHERE p.first_name IS NOT NULL AND p.last_name IS NOT NULL
+ORDER BY o.observation_date DESC, o.id DESC
+LIMIT $1;
+"""

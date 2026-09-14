@@ -153,18 +153,23 @@ async def main():
                     continue
 
                 if len(batch_records) >= 500:
-                    await conn.executemany(UPSERT_QUERY, batch_records)
-                    await conn.executemany(OBSERVATION_UPSERT_QUERY, observation_batch)
-                    await conn.executemany(CONDITION_UPSERT_QUERY, condition_batch)
+                    # All three writes for a chunk succeed or none do -- a crash
+                    # partway through can't leave a patient row without its
+                    # observations/conditions.
+                    async with conn.transaction():
+                        await conn.executemany(UPSERT_QUERY, batch_records)
+                        await conn.executemany(OBSERVATION_UPSERT_QUERY, observation_batch)
+                        await conn.executemany(CONDITION_UPSERT_QUERY, condition_batch)
                     print(f"Upserted chunk of {len(batch_records)} patients, {len(observation_batch)} observations, {len(condition_batch)} conditions...")
                     batch_records.clear()
                     observation_batch.clear()
                     condition_batch.clear()
 
             if batch_records:
-                await conn.executemany(UPSERT_QUERY, batch_records)
-                await conn.executemany(OBSERVATION_UPSERT_QUERY, observation_batch)
-                await conn.executemany(CONDITION_UPSERT_QUERY, condition_batch)
+                async with conn.transaction():
+                    await conn.executemany(UPSERT_QUERY, batch_records)
+                    await conn.executemany(OBSERVATION_UPSERT_QUERY, observation_batch)
+                    await conn.executemany(CONDITION_UPSERT_QUERY, condition_batch)
                 print(f"Upserted final chunk of {len(batch_records)} patients, {len(observation_batch)} observations, {len(condition_batch)} conditions.")
 
         print(

@@ -51,5 +51,6 @@ jobs:
               env:
                 # altered database URL to check if the tests can connect to the database
                 DATABASE_URL: postgresql://test_user:test_password@127.0.0.1:5432/test_clinical_db
+                API_KEY: test-key
               run: |
                 pytest tests/ -v

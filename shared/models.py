@@ -95,3 +95,24 @@ class ObservationHistoryEntry(BaseModel):
     observation_value: float | None = None
     observation_unit: str | None = None
     observation_date: datetime.date | None = None
+
+class BmiDistribution(BaseModel):
+    underweight: int
+    normal: int
+    overweight: int
+    obese: int
+
+class PatientStats(BaseModel):
+    total_patients: int
+    avg_bmi: float | None = None
+    bmi_distribution: BmiDistribution
+    most_recent_patient_at: datetime.datetime | None = None
+
+class RecentActivityEntry(BaseModel):
+    patient_id: uuid.UUID
+    first_name: str | None = None
+    last_name: str | None = None
+    observation_description: str | None = None
+    observation_value: float | None = None
+    observation_unit: str | None = None
+    observation_date: datetime.date | None = None

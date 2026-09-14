@@ -1,9 +1,12 @@
-import datetime, json, os, uuid, uvicorn, asyncpg
+import datetime, json, logging, os, time, uuid, uvicorn, asyncpg
 from typing import Any
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Query, status, HTTPException
+from fastapi import Depends, FastAPI, Header, Query, Request, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from shared.extraction import extract_clinical_data, compute_bmi
 from shared.models import (
     ManualPatientIntake,
@@ -11,6 +14,9 @@ from shared.models import (
     PatientMatchResponse,
     PatientSnapshot,
     ObservationHistoryEntry,
+    PatientStats,
+    BmiDistribution,
+    RecentActivityEntry,
 )
 from shared.queries import (
     UPSERT_QUERY,
@@ -19,7 +25,12 @@ from shared.queries import (
     MANUAL_ENTRY_UPSERT_QUERY,
     OBSERVATIONS_BY_PATIENT_QUERY,
     PATIENT_BY_ID_QUERY,
+    PATIENT_STATS_QUERY,
+    RECENT_ACTIVITY_QUERY,
 )
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("clinical_api")
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -27,6 +38,10 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # via env var so a load-test experiment can compare pool sizes without editing
 # and reverting this file between runs.
 POOL_MAX_SIZE = int(os.getenv("POOL_MAX_SIZE", "1"))
+# Required on every write endpoint (ingestion, manual entry). Read-only endpoints
+# stay open since the dashboard hits them without a key. Fails closed if unset --
+# a missing API_KEY is a misconfiguration, not "no auth needed".
+API_KEY = os.getenv("API_KEY")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -51,6 +66,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Per-client-IP rate limiting on the write endpoints -- a basic defensive layer
+# against a runaway client or naive abuse, independent of the API key check.
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -59,9 +80,40 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def add_request_id_and_timing(request: Request, call_next):
+    """
+    Tags every response with a short request id and logs method, path, status,
+    and duration. Cheap to add, and it's the first thing you reach for once a
+    load test (like the pooling investigation below) raises "which request was
+    slow?" instead of just "the p99 was slow."
+    """
+    request_id = str(uuid.uuid4())[:8]
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - start) * 1000
+    response.headers["X-Request-ID"] = request_id
+    logger.info(
+        f"[{request_id}] {request.method} {request.url.path} "
+        f"-> {response.status_code} ({duration_ms:.1f}ms)"
+    )
+    return response
+
 async def get_db():
     async with app.state.pool.acquire() as conn:
         yield conn
+
+async def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")):
+    if not API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Server is not configured with an API_KEY.",
+        )
+    if x_api_key != API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid API key.",
+        )
 
 @app.get("/api/health")
 async def health_check(conn: asyncpg.Connection = Depends(get_db)):
@@ -111,6 +163,35 @@ async def get_patients(
     rows = await conn.fetch(query, *params)
     return [dict(row) for row in rows]
 
+@app.get("/api/stats", response_model=PatientStats)
+async def get_patient_stats(conn: asyncpg.Connection = Depends(get_db)):
+    """
+    SQL-side aggregates for the dashboard's Home view. Deliberately not
+    "fetch a page of patients and average them in Python" -- that undercounts
+    the moment the table has more rows than the page size, and does needless
+    work pulling full rows just to look at three numbers.
+    """
+    row = await conn.fetchrow(PATIENT_STATS_QUERY)
+    return PatientStats(
+        total_patients=row["total_patients"],
+        avg_bmi=float(row["avg_bmi"]) if row["avg_bmi"] is not None else None,
+        bmi_distribution=BmiDistribution(
+            underweight=row["underweight_count"],
+            normal=row["normal_count"],
+            overweight=row["overweight_count"],
+            obese=row["obese_count"],
+        ),
+        most_recent_patient_at=row["most_recent_patient_at"],
+    )
+
+@app.get("/api/patients/recent-activity", response_model=list[RecentActivityEntry])
+async def get_recent_activity(
+    limit: int = Query(5, ge=1, le=50),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    rows = await conn.fetch(RECENT_ACTIVITY_QUERY, limit)
+    return [RecentActivityEntry(**dict(row)) for row in rows]
+
 @app.get("/api/patients/lookup", response_model=PatientMatchResponse)
 async def lookup_patient_by_name_dob(
     first_name: str,
@@ -150,8 +231,14 @@ async def get_patient_by_id(
         )
     return PatientSnapshot(**dict(row))
 
-@app.post("/api/patients/ingest", status_code=status.HTTP_201_CREATED)
+@app.post(
+    "/api/patients/ingest",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_api_key)],
+)
+@limiter.limit("30/minute")
 async def ingest_single_bundle(
+    request: Request,
     payload: dict[str, Any],
     conn: asyncpg.Connection = Depends(get_db),
 ):
@@ -188,8 +275,11 @@ async def ingest_single_bundle(
     "/api/patients/manual-entry",
     status_code=status.HTTP_201_CREATED,
     response_model=ManualIntakeResponse,
+    dependencies=[Depends(require_api_key)],
 )
+@limiter.limit("30/minute")
 async def manual_patient_entry(
+    request: Request,
     intake: ManualPatientIntake,
     conn: asyncpg.Connection = Depends(get_db),
 ):
@@ -206,21 +296,6 @@ async def manual_patient_entry(
 
     bmi, bmi_category = compute_bmi(intake.height_cm, intake.weight_kg)
 
-    await conn.execute(
-        MANUAL_ENTRY_UPSERT_QUERY,
-        patient_id,
-        intake.first_name,
-        intake.last_name,
-        intake.gender,
-        intake.birth_date,
-        intake.height_cm,
-        intake.weight_kg,
-        bmi,
-        bmi_category,
-        intake.systolic_bp,
-        intake.diastolic_bp,
-    )
-
     obs_date = intake.observation_date or datetime.date.today()
     observation_rows = []
     if intake.height_cm is not None:
@@ -232,8 +307,27 @@ async def manual_patient_entry(
     if intake.diastolic_bp is not None:
         observation_rows.append((uuid.uuid4(), patient_id, "8462-4", "Diastolic Blood Pressure", intake.diastolic_bp, "mm[Hg]", obs_date))
 
-    if observation_rows:
-        await conn.executemany(OBSERVATION_UPSERT_QUERY, observation_rows)
+    # Same atomicity concern as the batch worker: a patient upsert and its
+    # observation rows are one clinical fact (this visit), not two independent
+    # writes. Wrapping them in a transaction means a crash mid-write leaves
+    # neither behind, instead of a patient record with no vitals attached.
+    async with conn.transaction():
+        await conn.execute(
+            MANUAL_ENTRY_UPSERT_QUERY,
+            patient_id,
+            intake.first_name,
+            intake.last_name,
+            intake.gender,
+            intake.birth_date,
+            intake.height_cm,
+            intake.weight_kg,
+            bmi,
+            bmi_category,
+            intake.systolic_bp,
+            intake.diastolic_bp,
+        )
+        if observation_rows:
+            await conn.executemany(OBSERVATION_UPSERT_QUERY, observation_rows)
 
     return ManualIntakeResponse(
         patient_id=patient_id,

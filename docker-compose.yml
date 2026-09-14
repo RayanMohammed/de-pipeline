@@ -1,0 +1,59 @@
+# Spins up the whole platform (Postgres, the API, the dashboard) with one
+# command, against a disposable local database -- so a reviewer can run this
+# project without a Supabase account or R2 credentials.
+#
+#   docker compose up --build
+#   -> dashboard: http://localhost:8501
+#   -> API docs:  http://localhost:8000/docs
+#
+# This is a local approximation, not the deployed architecture: the real
+# pipeline runs against managed Supabase Postgres and Cloudflare R2, and the
+# connection-pooling investigation in the README was run against that managed
+# pooler specifically. This compose file exists so the application layer is
+# runnable and reviewable without needing those cloud accounts.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: clinical
+      POSTGRES_PASSWORD: clinical
+      POSTGRES_DB: clinical_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clinical -d clinical_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://clinical:clinical@db:5432/clinical_db
+      API_KEY: ${API_KEY:-dev-key}
+      POOL_MAX_SIZE: "10"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    environment:
+      API_BASE_URL: http://api:8000
+      API_KEY: ${API_KEY:-dev-key}
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+
+volumes:
+  db_data:

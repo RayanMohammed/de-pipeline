@@ -29,13 +29,38 @@ api/main.py (FastAPI)  ---(manual intake)--+
 dashboard/app.py (Streamlit)          tableau/csv_export.py --> Tableau
 ```
 
+## See it in action
+
+**Looking up a patient and reviewing their chart** — vitals trend charts, BMI/BP badges, and the tabbed Overview / Vitals Trends / Record Visit layout:
+
+![Patient chart walkthrough](assets/patient-chart.gif)
+
+**The identity-collision safety net, end to end:** looking up a patient whose name and birth date match an existing record, confirming it's actually a different person, and seeing the new chart tracked separately with its own vitals.
+
+![Identity collision confirmation flow](assets/identity-collision.gif)
+
+**Cohort-level analytics (Tableau, embedded in the dashboard):**
+
+![Cohort overview](assets/cohort-dashboard.png)
+![Per-patient drill-down](assets/cohort-dashboard-detail.png)
+
 ## Tech stack
 
-Python (FastAPI, asyncpg, Pydantic, Streamlit, boto3, Locust), Postgres via Supabase, Cloudflare R2 for object storage, Tableau for cohort analytics, GitHub Actions for CI, pytest for testing.
+Python (FastAPI, asyncpg, Pydantic, Streamlit, Plotly, boto3, Locust, slowapi), Postgres via Supabase, Cloudflare R2 for object storage, Tableau for cohort analytics, Docker Compose for local/reviewer setup, GitHub Actions for CI, pytest for testing.
 
 ## Running it locally
 
-Copy `.env.example` to `.env` and fill in `DATABASE_URL` (a Postgres connection string) and the `R2_*` credentials if you're running the batch worker.
+**Fastest path -- Docker Compose, no cloud accounts needed:**
+
+```bash
+docker compose up --build
+```
+
+This starts a disposable local Postgres, the API, and the dashboard together (`db` -> `api` -> `dashboard`, in that dependency order, with the API waiting on a real Postgres health check rather than a fixed sleep). Dashboard: `http://localhost:8501`. Interactive API docs: `http://localhost:8000/docs`. It's a local stand-in for the real architecture -- the deployed version runs against managed Supabase Postgres and Cloudflare R2, and the connection-pooling investigation below was run against that managed pooler specifically -- but it means anyone reviewing this project can run the application layer without provisioning either.
+
+**Running it natively instead** (needed for the batch worker, or to reproduce the pooling experiment against a real managed Postgres):
+
+Copy `.env.example` to `.env` and fill in `DATABASE_URL` (a Postgres connection string), an `API_KEY` of your choosing (required by the API's write endpoints -- the dashboard reads the same value from `.env` and sends it automatically), and the `R2_*` credentials if you're running the batch worker.
 
 ```bash
 pip install -r requirements.txt
@@ -82,13 +107,14 @@ Swap `POOL_MAX_SIZE` and `DATABASE_URL` (direct connection vs. the transaction-p
 | `shared/extraction.py` | FHIR parsing: pulls vitals and blood-pressure components out of raw bundle JSON, computes BMI, generates deterministic child-row IDs. |
 | `shared/queries.py` | All raw SQL — upserts for the batch worker, reads for the API. |
 | `shared/models.py` | Pydantic request/response schemas shared between the API and its tests. |
-| `api/main.py` | The FastAPI service — ingestion, manual intake, patient lookup, observation history, patient snapshot. |
+| `api/main.py` | The FastAPI service — ingestion, manual intake, patient lookup, observation history, patient snapshot, cohort stats, recent activity. |
 | `dashboard/app.py` | The Streamlit clinical dashboard. |
 | `db/schema.sql` | Table definitions and indexes for `patients`, `observations`, `conditions`. |
 | `tableau/csv_export.py` | Flattens the DB into CSVs for the Tableau workbook. |
 | `tests/` | Unit tests (pure extraction logic, no DB) and integration tests (real test DB, run in CI). |
 | `tests/locustfile.py`, `tests/locustfile_baseline.py` | Load-test definitions used in the connection-pooling investigation below. |
 | `.github/workflows/ci.yml` | Spins up an ephemeral Postgres container and runs the full test suite on every push/PR to `main`. |
+| `docker-compose.yml`, `api/Dockerfile`, `dashboard/Dockerfile` | Runs the whole stack (a disposable local Postgres, the API, the dashboard) with one command -- see "Running it locally" below. |
 
 ## Design decisions worth explaining
 
@@ -121,19 +147,38 @@ Routing that same kind of workload through Supabase's transaction-mode pooler (S
 
 Even the best-performing configuration here reaches only about 30% of the zero-database ceiling (54.6 of 185.1 req/s), which is itself the more durable finding: a network round trip and a real query execution against Postgres is an irreducible cost that no amount of pool tuning eliminates — tuning only changes how gracefully the system degrades under concurrent load, not whether that cost exists at all. `statement_cache_size=0` (needed for asyncpg compatibility with transaction-mode pooling, since prepared statements are tied to a specific physical connection and PgBouncer can route different queries on the same logical connection to different physical backends) held up cleanly across every run — zero query errors in any configuration.
 
-## Known limitations / what I'd do next
+## Hardening pass
 
-The batch worker's `executemany` calls for a patient's demographics, observations, and conditions aren't wrapped in an explicit transaction. A crash mid-chunk could leave a patient row written without its associated observations or conditions. The fix is straightforward (`async with conn.transaction():` around each chunk), just not yet done.
+Two gaps got fixed after the initial build:
+
+**Transactional batch writes.** The batch worker's per-chunk writes (a patient row plus its observations and conditions) previously ran as three independent `executemany` calls. A crash between them could leave a patient written without its vitals. Each chunk is now wrapped in `async with conn.transaction():` — the three writes commit together or not at all.
+
+**API key auth on the write endpoints.** The API had no authentication at all — anyone who could reach it could write data. `POST /api/patients/ingest` and `POST /api/patients/manual-entry` now require an `X-API-Key` header matching the `API_KEY` environment variable (checked via a FastAPI dependency, `require_api_key`, that fails closed if `API_KEY` isn't configured at all). Read endpoints stay open, since the dashboard consumes them without a login flow. This is a pragmatic middle ground for a portfolio project, not a production auth story — a real deployment would want per-user identity and scoped permissions, not one shared static key.
+
+A second pass added three more things a real service needs and a demo doesn't, plus one bug a reviewer caught by actually reading the dashboard:
+
+**Per-IP rate limiting on the write endpoints, on top of the API key.** `slowapi` caps `/api/patients/ingest` and `/api/patients/manual-entry` at 30 requests/minute per client IP. This is a different failure mode than the API key protects against — the key stops someone without credentials, the limiter stops a misbehaving or compromised *authorized* client from hammering the write path (a stuck retry loop, a bug in a script using a valid key). Defense in depth: two independent, narrower controls instead of one broad one.
+
+**Request-id and timing middleware.** Every response now carries an `X-Request-ID` header, and every request is logged with its method, path, status code, and duration. Small addition, but it's exactly the tool you reach for the moment a load test (like the one below) raises "which request was slow?" instead of just "the p99 was slow" — the load-testing section already needed this in spirit; now the app actually has it.
+
+**A real stats endpoint, replacing a page-size bug.** The dashboard's Home view originally computed "patients tracked" by fetching up to 100 patient rows and counting what came back — correct only as long as the table stays under 100 rows, and silently wrong the moment it doesn't. `GET /api/stats` runs the count and the BMI average as actual SQL aggregates (`COUNT(*)`, `AVG(bmi)`, one `COUNT(*) FILTER (...)` per BMI category) against the whole table, and the dashboard now calls that instead of estimating from a page of results. `GET /api/patients/recent-activity` is the same idea applied to a feed instead of a summary: the most recent observations across every patient, joined back to who they belong to, for the dashboard's new activity list.
+
+## Making the dashboard read like clinical software, not a form
+
+The first visual pass (custom CSS, badges, Plotly charts) made the dashboard look intentional instead of default-Streamlit, but it still didn't resemble software built for a clinical workflow. Closing that gap meant looking at two different references and being honest about which parts of each actually apply here:
+
+Real EHR software (Epic, specifically, since that's what I had screenshots of) is dense because it represents an entire hospital's scheduling, billing, labs, and medication state at once — that density is earned by the amount of real state behind it, not a style choice to copy. This project tracks demographics and four vitals. Reproducing Epic's information density here would just mean empty-looking panels with nothing behind them. So instead of cloning the density, two specific, proportional patterns came over: **colored clinical alert banners** (`clinical_alerts()` flags an Obese BMI or an elevated/high blood pressure reading with an amber or red callout, instead of leaving the interpretation to whoever's reading a number), and **tabbed chart navigation** (an existing patient's chart is now `Overview` / `Vitals Trends` / `Record Visit` instead of one long scrolling page).
+
+Separately, a friend's portfolio sites (marketing landing pages, built to sell a product in fifteen seconds) had one thing worth borrowing even though they're a different category of deliverable entirely: a confident first impression instead of dropping straight into a form. The new **Home view** is that pattern applied honestly — a one-line pitch, three live stat tiles pulled from the real database, and a three-card grid describing what the tool actually does — landing-page confidence backed by real data instead of a mockup.
+
+The last addition is a **persistent patient identity rail**: once a patient is loaded, a compact card in the sidebar keeps showing who's active (name, age, DOB) no matter which tab or view you switch to. It's a small thing, but it's the difference between a patient's identity being a page you were just on versus context that's always visible — which is the whole point of the identity-collision safeguard elsewhere in this project actually mattering in the UI, not just in the API.
+
+## Known limitations / what I'd do next
 
 Running multiple API instances behind a load balancer (`uvicorn --workers N` as the simplest local approximation) would multiply the number of database connections by however many workers are running, since each worker builds its own independent pool in its own `lifespan`. That's worth accounting for explicitly before scaling horizontally against a connection-limited managed Postgres instance — it's exactly the kind of problem a shared external pooler (like the one tested above) is meant to solve once there's more than one application process competing for the same database.
 
-## Screenshots / demo
+The API key is a single shared secret, not per-user auth — fine for a demo, not how this would work with more than one real user.
 
-**The identity-collision safety net, end to end:** looking up a patient whose name and birth date match an existing record, confirming it's actually a different person, and seeing the new chart tracked separately with its own vitals.
+The rate limiter keys on `request.client.host`, which is the direct TCP peer. Behind a reverse proxy or load balancer in a real deployment, that would be the proxy's IP for every request unless `X-Forwarded-For` is parsed and trusted correctly — a genuinely tricky thing to get right securely, and out of scope here since this project isn't deployed behind one.
 
-<!-- ![Identity collision confirmation flow](assets/identity-collision.gif) -->
-
-**Cohort-level analytics (Tableau, embedded in the dashboard):**
-
-![Cohort overview](assets/cohort-dashboard.png)
-![Per-patient drill-down](assets/cohort-dashboard-detail.png)
+The dashboard's patient search is exact-match on name and birth date, by design — that precision is what makes the identity-collision safeguard trustworthy (a fuzzy match would need its own confidence-scoring and confirmation UX, which is a bigger feature than this project needs to make its point). A typo in either field currently just looks like "no match found" rather than a near-miss worth surfacing, which would be the next thing to improve if this went further.
