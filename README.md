@@ -130,6 +130,8 @@ Swap `POOL_MAX_SIZE` and `DATABASE_URL` (direct connection vs. the transaction-p
 
 **The dashboard is built around a visit, not a data table.** Early versions just listed rows. The current one asks: who is this patient, have we seen them before, what's their trend over time, what happened at this visit — the actual sequence of a clinical encounter. That's a sidebar-navigated, lookup-then-chart flow using `st.session_state` to carry the active patient across Streamlit's rerun-on-every-interaction execution model, with vitals pivoted into wide format for trend charts. It's a small thing, but it's the difference between "a script that shows data" and "a tool someone could plausibly open during their workday."
 
+**A shared query is a shared contract.** `UPSERT_QUERY` in `shared/queries.py` is called from two places: the batch worker and the API's `/api/patients/ingest` endpoint. Adding an 11th column (`ingestion_run_id`) for the scheduled pipeline meant updating the batch worker's call site -- and it was easy to stop there, since that's the one actually being changed for the new feature. The API endpoint's `record_tuple` was still building 10 values, and CI caught it immediately: every request through that endpoint started failing with `asyncpg.exceptions._base.InterfaceError: the server expects 11 arguments for this query, 10 were passed`, because `test_ingest_valid_bundle` actually exercises that endpoint on every push. The fix was one line (pass `None`, since single-bundle API ingestion isn't a tagged scheduled run), but the lesson isn't about this one query -- it's that a query shared across call sites is a contract those call sites all depend on, and changing it means checking every place that calls it, not just the one you're actively working on.
+
 ## The connection-pooling investigation
 
 This is the part of the project I'd actually walk an interviewer through, because it has a real hypothesis, a controlled experiment, a wrong first read of the data, and a corrected conclusion.
@@ -190,6 +192,8 @@ Each scheduled run:
 3. `worker/batch_ingest.py` ingests that archive exactly like any other, tagging every row it writes with `--ingestion-run-id` set to the GitHub Actions run ID -- so `SELECT ingestion_run_id, COUNT(*) FROM patients GROUP BY 1` shows exactly which rows came from which scheduled run, real lineage instead of one undifferentiated blob of data.
 
 The cap exists because this runs against Supabase's free tier, which caps storage and compute -- not because of any limit on how much synthetic data Synthea itself can generate. Once the count check reports no headroom left, the workflow still fires on its 4-hour schedule but exits right after the cap check -- the intended steady state once the campaign completes, not a failure.
+
+Verified with a real `workflow_dispatch` run against production, not just a syntax check -- Synthea generated a fresh batch, it landed in R2, and it upserted into Supabase with a real `ingestion_run_id` attached, all without anyone at a keyboard.
 
 ## Known limitations / what I'd do next
 
